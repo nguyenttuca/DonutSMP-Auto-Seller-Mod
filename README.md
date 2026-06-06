@@ -1,4 +1,4 @@
-# ASell — Fabric Auction House Auto-Sell Mod
+# Fabric Auction House Auto-Sell Mod
 
 <div align="center">
 
