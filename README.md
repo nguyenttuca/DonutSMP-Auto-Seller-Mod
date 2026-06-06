@@ -83,6 +83,8 @@ IDLE → PREPARING_ITEM → SENDING_COMMAND → WAITING_FOR_GUI → CLICKING_CON
 3. Khởi động Minecraft với Fabric profile
 4. Vào game và dùng `/asell help`
 
+[Video Hướng Dẫn Chi Tiết](https://www.youtube.com/watch?v=hk0OvS75VD4)
+
 ---
 
 ## 🎮 Hướng dẫn sử dụng
