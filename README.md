@@ -78,7 +78,7 @@ IDLE → PREPARING_ITEM → SENDING_COMMAND → WAITING_FOR_GUI → CLICKING_CON
 
 ### Hướng dẫn cài
 
-1. Tải file `.jar` từ [Releases](https://github.com/nguyenttuca/asell-mod/releases)
+1. Tải file `.jar` từ [Releases](https://github.com/nguyenttuca/DonutSMP-Auto-Seller-Mod/releases/tag/v1.0.0)
 2. Copy vào thư mục `.minecraft/mods/`
 3. Khởi động Minecraft với Fabric profile
 4. Vào game và dùng `/asell help`
