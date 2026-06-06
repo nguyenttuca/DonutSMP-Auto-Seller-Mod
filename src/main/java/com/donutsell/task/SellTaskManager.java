@@ -725,31 +725,33 @@ public class SellTaskManager {
         int totalSlots = mc.player.currentScreenHandler.slots.size();
         int containerSize = totalSlots - 36;
 
-        // Duyệt từ vị trí orderCollectIndex, tìm slot có item rồi Shift+Click
-        while (orderCollectIndex < containerSize) {
-            net.minecraft.screen.slot.Slot slot =
-                    mc.player.currentScreenHandler.getSlot(orderCollectIndex);
+        // Theo yêu cầu: Chỉ lấy 1 stack đầu tiên tìm thấy rồi đóng GUI
+        for (int i = 0; i < containerSize; i++) {
+            net.minecraft.screen.slot.Slot slot = mc.player.currentScreenHandler.getSlot(i);
 
             if (slot != null && slot.hasStack() && !slot.getStack().isEmpty()) {
                 if (config.chatNotifications) {
                     String itemName = slot.getStack().getName().getString();
                     int count = slot.getStack().getCount();
-                    ChatUtils.sendInfo("Lấy: §f" + count + "x " + itemName
-                            + " §7(slot " + orderCollectIndex + ")");
+                    ChatUtils.sendInfo("Lấy 1 stack: §f" + count + "x " + itemName
+                            + " §7(slot " + i + "). Đóng GUI chờ sync...");
                 }
-                // Shift+Click để chuyển nhanh vào inventory
-                InventoryUtils.clickScreenSlot(orderCollectIndex, 0, SlotActionType.QUICK_MOVE);
-                orderCollectIndex++;
-                return; // chờ tick tiếp theo
+                // Shift+Click 1 lần duy nhất để lấy 1 stack
+                InventoryUtils.clickScreenSlot(i, 0, SlotActionType.QUICK_MOVE);
+                
+                // Đóng GUI ngay lập tức
+                mc.player.closeHandledScreen();
+                orderCollectIndex = -999; // sentinel: chờ inventory sync
+                tickCounter = 0;         // bắt đầu đếm 25 tick delay
+                return;
             }
-            orderCollectIndex++;
         }
 
-        // Đã duyệt hết tất cả slot → đóng GUI và chờ sync
-        if (config.chatNotifications) ChatUtils.sendInfo("Đã lấy xong tất cả slot. Đóng GUI và chờ sync...");
+        // Không tìm thấy slot nào có item
+        if (config.chatNotifications) ChatUtils.sendWarning("GUI Collect trống. Đóng GUI...");
         mc.player.closeHandledScreen();
-        orderCollectIndex = -999; // sentinel: chờ inventory sync
-        tickCounter = 0;         // bắt đầu đếm 25 tick delay
+        orderCollectIndex = -999;
+        tickCounter = 0;
     }
 
     // ========================= Helpers =========================
