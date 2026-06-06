@@ -24,9 +24,13 @@ public enum SellState {
     // ========== Order Fetching States ==========
     /** Sending /order command to fetch items */
     FETCHING_ORDER,
-    /** Waiting for order GUI to open */
+    /** Waiting for order list GUI to open (Page 1) */
     WAITING_ORDER_GUI,
-    /** Clicking items in order GUI to collect them */
+    /** Clicking on a completed order in the order list to enter it */
+    NAVIGATING_TO_ORDER_EDIT,
+    /** Waiting in the Edit Order screen and clicking the COLLECT button */
+    NAVIGATING_TO_COLLECT,
+    /** Collecting items in the "Collect Items" screen */
     COLLECTING_ORDER_ITEMS,
 
     /** All items sold successfully */

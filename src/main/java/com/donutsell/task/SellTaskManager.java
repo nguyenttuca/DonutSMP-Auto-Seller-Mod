@@ -16,9 +16,14 @@ import net.minecraft.screen.slot.SlotActionType;
  *   IDLE → PREPARING_ITEM → [ADJUSTING_QUANTITY | SWITCHING_HOTBAR] →
  *   SENDING_COMMAND → WAITING_FOR_GUI → CLICKING_CONFIRM → COOLDOWN → (loop)
  *
- * State flow (auto-order):
- *   (when out of items) → FETCHING_ORDER → WAITING_ORDER_GUI →
- *   COLLECTING_ORDER_ITEMS → PREPARING_ITEM
+ * State flow (auto-order) – 3-screen GUI navigation:
+ *   (when out of items)
+ *   → FETCHING_ORDER          : gửi /order (hoặc config.orderCommand)
+ *   → WAITING_ORDER_GUI       : chờ màn hình "ORDERS (Page X)" mở, tìm order hoàn thành → click
+ *   → NAVIGATING_TO_ORDER_EDIT: chờ màn hình "ORDERS -> Your Orders" / "Edit Order" → click COLLECT
+ *   → NAVIGATING_TO_COLLECT   : chờ màn hình "ORDERS -> Collect Items" xác nhận sẵn sàng
+ *   → COLLECTING_ORDER_ITEMS  : Shift+Click từng slot để lấy đồ về inventory
+ *   → PREPARING_ITEM          : tiếp tục bán
  *
  * Safety features:
  *   - Randomized timing for anti-ban
@@ -58,6 +63,7 @@ public class SellTaskManager {
     // Auto-order fields
     private boolean hasTriedOrder = false;
     private int orderCollectIndex = 0;
+    private int orderFoundSlot = -1;  // slot index of completed order in order-list GUI
 
     private int randomizeDelay(int baseDelay) {
         if (baseDelay <= 5) return baseDelay;
@@ -103,6 +109,7 @@ public class SellTaskManager {
         this.breakTicksRemaining = 0;
         this.hasTriedOrder = false;
         this.orderCollectIndex = 0;
+        this.orderFoundSlot = -1;
 
         int totalItems = InventoryUtils.getTotalCount(config.targetItem);
         if (totalItems == 0 && !config.autoOrder) {
@@ -185,9 +192,11 @@ public class SellTaskManager {
             case WAITING_FOR_GUI      -> handleWaitingForGui(mc);
             case CLICKING_CONFIRM     -> handleClickingConfirm(mc);
             case COOLDOWN             -> handleCooldown(mc);
-            case FETCHING_ORDER       -> handleFetchingOrder(mc);
-            case WAITING_ORDER_GUI    -> handleWaitingOrderGui(mc);
-            case COLLECTING_ORDER_ITEMS -> handleCollectingOrderItems(mc);
+            case FETCHING_ORDER            -> handleFetchingOrder(mc);
+            case WAITING_ORDER_GUI         -> handleWaitingOrderGui(mc);
+            case NAVIGATING_TO_ORDER_EDIT  -> handleNavigatingToOrderEdit(mc);
+            case NAVIGATING_TO_COLLECT     -> handleNavigatingToCollect(mc);
+            case COLLECTING_ORDER_ITEMS    -> handleCollectingOrderItems(mc);
             default -> { /* IDLE, FINISHED, ERROR */ }
         }
     }
@@ -497,6 +506,9 @@ public class SellTaskManager {
 
     // ========================= Order Fetching States =========================
 
+    /**
+     * Bước 1: Đóng mọi GUI đang mở, đợi 10 tick rồi gửi lệnh /order.
+     */
     private void handleFetchingOrder(MinecraftClient mc) {
         if (mc.currentScreen != null) {
             mc.player.closeHandledScreen();
@@ -514,77 +526,247 @@ public class SellTaskManager {
 
         state = SellState.WAITING_ORDER_GUI;
         tickCounter = 0;
+        orderFoundSlot = -1;
     }
 
+    /**
+     * Bước 1→2: GUI chính của /order đã mở.
+     * Tìm nút "Your Orders" và click vào.
+     */
     private void handleWaitingOrderGui(MinecraftClient mc) {
         tickCounter++;
 
         if (tickCounter > config.guiTimeout) {
             ChatUtils.sendWarning("Timeout chờ GUI order! Dừng tác vụ.");
+            if (mc.player != null) mc.player.closeHandledScreen();
             state = SellState.FINISHED;
             tickCounter = 0;
             return;
         }
 
-        if (mc.currentScreen instanceof HandledScreen<?>) {
-            if (config.chatNotifications) {
-                String title = mc.currentScreen.getTitle().getString();
-                ChatUtils.sendInfo("GUI order đã mở: §f" + title);
+        if (!(mc.currentScreen instanceof HandledScreen<?>)) return;
+        if (tickCounter < 8) return; // chờ GUI render
+        if (mc.player == null || mc.player.currentScreenHandler == null) return;
+
+        String title = mc.currentScreen.getTitle().getString();
+        if (config.chatNotifications) ChatUtils.sendInfo("GUI order đã mở: §f" + title);
+
+        int totalSlots = mc.player.currentScreenHandler.slots.size();
+        int containerSize = totalSlots - 36;
+
+        // Tìm nút "Your Orders": item có tên chứa "your orders" (không phân biệt hoa/thường)
+        for (int i = 0; i < containerSize; i++) {
+            net.minecraft.screen.slot.Slot slot = mc.player.currentScreenHandler.getSlot(i);
+            if (slot == null || !slot.hasStack() || slot.getStack().isEmpty()) continue;
+
+            String displayName = slot.getStack().getName().getString().toLowerCase();
+            if (displayName.contains("your orders") || displayName.contains("your order")) {
+                if (config.chatNotifications)
+                    ChatUtils.sendInfo("Click nút §f" + slot.getStack().getName().getString()
+                            + " §7(slot " + i + ")");
+                InventoryUtils.clickScreenSlot(i);
+                state = SellState.NAVIGATING_TO_ORDER_EDIT;
+                tickCounter = 0;
+                return;
             }
-            state = SellState.COLLECTING_ORDER_ITEMS;
-            tickCounter = 0;
-            orderCollectIndex = 0;
         }
+
+        // Chưa thấy nút "Your Orders" → tiếp tục chờ (GUI có thể chưa render xong)
     }
 
-    private void handleCollectingOrderItems(MinecraftClient mc) {
+    /**
+     * Bước 2→3: Màn hình "Your Orders" đang hiển thị danh sách các order.
+     * Tìm item khớp với config.targetItem và click vào.
+     */
+    private void handleNavigatingToOrderEdit(MinecraftClient mc) {
         tickCounter++;
 
+        if (tickCounter > config.guiTimeout) {
+            ChatUtils.sendWarning("Timeout chờ màn hình Your Orders! Dừng tác vụ.");
+            if (mc.player != null) mc.player.closeHandledScreen();
+            state = SellState.FINISHED;
+            tickCounter = 0;
+            return;
+        }
+
         if (!(mc.currentScreen instanceof HandledScreen<?>)) {
+            tickCounter = 0;
+            return;
+        }
+
+        if (tickCounter < 5) return; // chờ GUI render
+        if (mc.player == null || mc.player.currentScreenHandler == null) return;
+
+        int totalSlots = mc.player.currentScreenHandler.slots.size();
+        int containerSize = totalSlots - 36;
+
+        // Tìm item khớp với target (blast_furnace) trong danh sách order
+        for (int i = 0; i < containerSize; i++) {
+            net.minecraft.screen.slot.Slot slot = mc.player.currentScreenHandler.getSlot(i);
+            if (slot == null || !slot.hasStack() || slot.getStack().isEmpty()) continue;
+
+            String itemId = InventoryUtils.getItemId(slot.getStack());
+            if (itemId.equals(config.targetItem)) {
+                if (config.chatNotifications)
+                    ChatUtils.sendInfo("Chọn order §f" + slot.getStack().getName().getString()
+                            + " §7(slot " + i + ")");
+                InventoryUtils.clickScreenSlot(i);
+                orderFoundSlot = i;
+                state = SellState.NAVIGATING_TO_COLLECT;
+                tickCounter = 0;
+                return;
+            }
+        }
+
+        // Chưa thấy item target → tiếp tục chờ
+    }
+
+    /**
+     * Bước 3→4: Màn hình chi tiết order đã mở.
+     * Tìm nút "Collect" và click vào.
+     */
+    private void handleNavigatingToCollect(MinecraftClient mc) {
+        tickCounter++;
+
+        if (tickCounter > config.guiTimeout) {
+            ChatUtils.sendWarning("Timeout chờ nút Collect! Dừng tác vụ.");
+            if (mc.player != null) mc.player.closeHandledScreen();
+            state = SellState.FINISHED;
+            tickCounter = 0;
+            return;
+        }
+
+        if (!(mc.currentScreen instanceof HandledScreen<?>)) {
+            // GUI đóng bất ngờ → có thể server đã tự collect
             int totalCount = InventoryUtils.getTotalCount(config.targetItem);
             if (totalCount > 0) {
-                ChatUtils.sendSuccess("Đã lấy được §f" + totalCount + " §7item từ order!");
+                ChatUtils.sendSuccess("Đã lấy được §f" + totalCount + " §7item (server tự collect)!");
                 state = SellState.PREPARING_ITEM;
             } else {
-                ChatUtils.sendWarning("Không lấy được item từ order. Dừng tác vụ.");
+                ChatUtils.sendWarning("GUI đóng bất ngờ, không lấy được item. Dừng.");
                 state = SellState.FINISHED;
             }
             tickCounter = 0;
             return;
         }
 
-        if (tickCounter < 10) return;
-        if (tickCounter % 3 != 0) return;
+        if (tickCounter < 5) return; // chờ GUI render
+        if (mc.player == null || mc.player.currentScreenHandler == null) return;
 
-        if (mc.player != null && mc.player.currentScreenHandler != null) {
-            int totalSlots = mc.player.currentScreenHandler.slots.size();
-            int containerSize = totalSlots - 36;
+        int totalSlots = mc.player.currentScreenHandler.slots.size();
+        int containerSize = totalSlots - 36;
 
-            while (orderCollectIndex < containerSize) {
-                net.minecraft.screen.slot.Slot slot = mc.player.currentScreenHandler.getSlot(orderCollectIndex);
-                if (slot != null && slot.hasStack() && !slot.getStack().isEmpty()) {
-                    InventoryUtils.clickScreenSlot(orderCollectIndex);
-                    if (config.chatNotifications) {
-                        String itemName = slot.getStack().getName().getString();
-                        ChatUtils.sendInfo("Lấy: §f" + itemName + " §7(slot " + orderCollectIndex + ")");
+        // Tìm nút Collect: tên hoặc lore chứa "collect"
+        for (int i = 0; i < containerSize; i++) {
+            net.minecraft.screen.slot.Slot slot = mc.player.currentScreenHandler.getSlot(i);
+            if (slot == null || !slot.hasStack() || slot.getStack().isEmpty()) continue;
+
+            ItemStack stack = slot.getStack();
+            String displayName = stack.getName().getString().toLowerCase();
+
+            boolean isCollect = displayName.contains("collect");
+            if (!isCollect) {
+                for (net.minecraft.text.Text loreLine : InventoryUtils.getItemLore(stack)) {
+                    if (loreLine.getString().toLowerCase().contains("collect")) {
+                        isCollect = true;
+                        break;
                     }
-                    orderCollectIndex++;
-                    return;
                 }
-                orderCollectIndex++;
             }
 
-            mc.player.closeHandledScreen();
+            if (isCollect) {
+                if (config.chatNotifications)
+                    ChatUtils.sendInfo("Nhấn §fCollect §7(slot " + i + ")");
+                InventoryUtils.clickScreenSlot(i);
+                // Sau khi click Collect, GUI mới sẽ mở ra
+                orderCollectIndex = 0;
+                state = SellState.COLLECTING_ORDER_ITEMS;
+                tickCounter = 0;
+                return;
+            }
+        }
+
+        // Chưa thấy nút Collect → tiếp tục chờ
+    }
+
+    /**
+     * Bước 5: Màn hình "Collect Items" đang mở.
+     * Shift+Click từng slot để chuyển nhanh toàn bộ đồ về inventory.
+     * Sau khi hết slot → đóng GUI và quay lại bán.
+     */
+    private void handleCollectingOrderItems(MinecraftClient mc) {
+        tickCounter++;
+
+        // GUI đóng → chờ inventory sync rồi mới kiểm tra
+        if (!(mc.currentScreen instanceof HandledScreen<?>)) {
+            // orderCollectIndex == -999: đã lấy xong, đang chờ server→client sync
+            // orderCollectIndex != -999: GUI đóng bất ngờ giữa chừng
+            if (tickCounter < 25) return; // chờ 25 tick (~1.25s) cho packet inventory về
+
             int totalCount = InventoryUtils.getTotalCount(config.targetItem);
             if (totalCount > 0) {
-                ChatUtils.sendSuccess("Đã lấy xong! Tổng: §f" + totalCount + " §7item. Tiếp tục bán...");
-                state = SellState.PREPARING_ITEM;
+                ChatUtils.sendSuccess("Đã lấy được §f" + totalCount + " §7item từ order! Tiếp tục bán...");
             } else {
-                ChatUtils.sendWarning("Không có item nào. Dừng tác vụ.");
-                state = SellState.FINISHED;
+                ChatUtils.sendWarning("Không tìm thấy item trong inventory. Thử tiếp tục...");
             }
+            // Luôn để PREPARING_ITEM tự xử lý (sẽ FINISH nếu thực sự hết đồ)
+            state = SellState.PREPARING_ITEM;
             tickCounter = 0;
+            return;
         }
+
+        // Đợi GUI ổn định
+        if (tickCounter < 8) return;
+        // Mỗi 3 tick click 1 slot (tránh spam)
+        if (tickCounter % 3 != 0) return;
+
+        if (mc.player == null || mc.player.currentScreenHandler == null) return;
+
+        int totalSlots = mc.player.currentScreenHandler.slots.size();
+        int containerSize = totalSlots - 36;
+
+        // Duyệt từ vị trí orderCollectIndex, tìm slot có item rồi Shift+Click
+        while (orderCollectIndex < containerSize) {
+            net.minecraft.screen.slot.Slot slot =
+                    mc.player.currentScreenHandler.getSlot(orderCollectIndex);
+
+            if (slot != null && slot.hasStack() && !slot.getStack().isEmpty()) {
+                if (config.chatNotifications) {
+                    String itemName = slot.getStack().getName().getString();
+                    int count = slot.getStack().getCount();
+                    ChatUtils.sendInfo("Lấy: §f" + count + "x " + itemName
+                            + " §7(slot " + orderCollectIndex + ")");
+                }
+                // Shift+Click để chuyển nhanh vào inventory
+                InventoryUtils.clickScreenSlot(orderCollectIndex, 0, SlotActionType.QUICK_MOVE);
+                orderCollectIndex++;
+                return; // chờ tick tiếp theo
+            }
+            orderCollectIndex++;
+        }
+
+        // Đã duyệt hết tất cả slot → đóng GUI và chờ sync
+        if (config.chatNotifications) ChatUtils.sendInfo("Đã lấy xong tất cả slot. Đóng GUI và chờ sync...");
+        mc.player.closeHandledScreen();
+        orderCollectIndex = -999; // sentinel: chờ inventory sync
+        tickCounter = 0;         // bắt đầu đếm 25 tick delay
+    }
+
+    // ========================= Helpers =========================
+
+    /**
+     * Kiểm tra xem item có phải decoration (glass pane, arrow, barrier, air) không.
+     * Dùng để lọc các slot trang trí trong GUI.
+     */
+    private boolean isNotDecoration(String itemId) {
+        if (itemId == null) return false;
+        return !itemId.contains("glass_pane")
+            && !itemId.contains("arrow")
+            && !itemId.contains("barrier")
+            && !itemId.contains("air")
+            && !itemId.contains("gray_stained")
+            && !itemId.contains("black_stained")
+            && !itemId.contains("white_stained");
     }
 
     // ========================= Alert =========================
