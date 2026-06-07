@@ -81,14 +81,16 @@ public class DonutSellCommand {
                     .then(ClientCommandManager.literal("item")
                         .then(ClientCommandManager.argument("itemId", StringArgumentType.greedyString())
                             .executes(ctx -> {
-                                String itemId = StringArgumentType.getString(ctx, "itemId").trim();
+                                String rawInput = StringArgumentType.getString(ctx, "itemId").trim();
+                                // Chuyển sang chữ thường và thay khoảng trắng bằng gạch dưới để khớp registry ID
+                                String formatted = rawInput.toLowerCase().replace(" ", "_");
                                 // Auto-prefix minecraft: nếu chưa có namespace
-                                if (!itemId.contains(":")) {
-                                    itemId = "minecraft:" + itemId;
+                                if (!formatted.contains(":")) {
+                                    formatted = "minecraft:" + formatted;
                                 }
-                                config.targetItem = itemId;
+                                config.targetItem = formatted;
                                 config.save();
-                                ChatUtils.sendSuccess("Đã đặt item mục tiêu: §f" + itemId);
+                                ChatUtils.sendSuccess("Đã đặt item mục tiêu: §f" + formatted);
                                 return 1;
                             })
                         )
