@@ -65,6 +65,9 @@ public class SellTaskManager {
     private int orderCollectIndex = 0;
     private int orderFoundSlot = -1;  // slot index of completed order in order-list GUI
 
+    // AH full wait fields
+    private int ahFullWaitTicks = 0;
+
     private int randomizeDelay(int baseDelay) {
         if (baseDelay <= 5) return baseDelay;
         double jitterPercent = -0.15 + Math.random() * 0.50;
@@ -110,6 +113,7 @@ public class SellTaskManager {
         this.hasTriedOrder = false;
         this.orderCollectIndex = 0;
         this.orderFoundSlot = -1;
+        this.ahFullWaitTicks = 0;
 
         int totalItems = InventoryUtils.getTotalCount(config.targetItem);
         if (totalItems == 0 && !config.autoOrder) {
@@ -145,6 +149,7 @@ public class SellTaskManager {
         adjustDropCount = 0;
         isOnBreak = false;
         breakTicksRemaining = 0;
+        ahFullWaitTicks = 0;
 
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player != null && mc.currentScreen != null) {
@@ -197,6 +202,7 @@ public class SellTaskManager {
             case NAVIGATING_TO_ORDER_EDIT  -> handleNavigatingToOrderEdit(mc);
             case NAVIGATING_TO_COLLECT     -> handleNavigatingToCollect(mc);
             case COLLECTING_ORDER_ITEMS    -> handleCollectingOrderItems(mc);
+            case WAITING_FOR_AH_SLOT       -> handleWaitingAhSlot();
             default -> { /* IDLE, FINISHED, ERROR */ }
         }
     }
@@ -769,6 +775,58 @@ public class SellTaskManager {
             && !itemId.contains("gray_stained")
             && !itemId.contains("black_stained")
             && !itemId.contains("white_stained");
+    }
+
+    // ========================= AH Full Handler =========================
+
+    private void handleWaitingAhSlot() {
+        ahFullWaitTicks--;
+        
+        if (ahFullWaitTicks % 1200 == 0 && ahFullWaitTicks > 0) {
+            int minutesLeft = (ahFullWaitTicks / 20) / 60;
+            if (config.chatNotifications) {
+                ChatUtils.sendInfo("Đang chờ gian hàng... (Sẽ tự dậy sau khoảng " + minutesLeft + " phút, hoặc khi có người mua).");
+            }
+        }
+
+        if (ahFullWaitTicks <= 0) {
+            if (config.chatNotifications) {
+                ChatUtils.sendSuccess("Đã hết thời gian AFK, đang thử thức dậy bán lại...");
+            }
+            state = SellState.PREPARING_ITEM;
+            tickCounter = 0;
+        }
+    }
+
+    public void triggerAhFull() {
+        if (isRunning() && state != SellState.WAITING_FOR_AH_SLOT) {
+            state = SellState.WAITING_FOR_AH_SLOT;
+            
+            // Chờ ngẫu nhiên từ 3 đến 4 phút (3600 đến 4800 ticks)
+            ahFullWaitTicks = 3600 + new java.util.Random().nextInt(1201); 
+            
+            int minutes = (ahFullWaitTicks / 20) / 60;
+            int seconds = (ahFullWaitTicks / 20) % 60;
+
+            if (config.chatNotifications) {
+                ChatUtils.sendWarning("Gian hàng ĐẦY! Đóng băng bot trong " + minutes + " phút " + seconds + " giây...");
+            }
+        }
+    }
+
+    /** 
+     * Được gọi khi bắt được chat báo có người mua hoặc đồ hết hạn 
+     */
+    public void triggerItemSold() {
+        if (state == SellState.WAITING_FOR_AH_SLOT) {
+            state = SellState.PREPARING_ITEM;
+            tickCounter = 0;
+            ahFullWaitTicks = 0;
+            
+            if (config.chatNotifications) {
+                ChatUtils.sendSuccess("Slot chợ đã trống! Giật mình tỉnh dậy bán tiếp...");
+            }
+        }
     }
 
     // ========================= Alert =========================

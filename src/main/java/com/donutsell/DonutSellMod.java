@@ -105,6 +105,22 @@ public class DonutSellMod implements ClientModInitializer {
                 if (containsName || isWhisper) {
                     taskManager.stopAndAlert("Phát hiện thông báo hệ thống nghi ngờ: " + message.getString());
                 }
+
+                boolean isAhFull = plainText.contains("you have too many listed items") || 
+                                   plainText.contains("too many listed items") || 
+                                   plainText.contains("have to many");
+
+                if (isAhFull) {
+                    taskManager.triggerAhFull();
+                }
+
+                boolean isItemSold = plainText.contains("bought your") || 
+                                     plainText.contains("đã mua") || 
+                                     plainText.contains("purchased");
+
+                if (isItemSold) {
+                    taskManager.triggerItemSold();
+                }
             }
         });
 

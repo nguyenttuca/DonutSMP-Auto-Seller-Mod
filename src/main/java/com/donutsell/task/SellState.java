@@ -33,6 +33,10 @@ public enum SellState {
     /** Collecting items in the "Collect Items" screen */
     COLLECTING_ORDER_ITEMS,
 
+    // ========== Cooldown/Wait States ==========
+    /** Waiting when Auction House listings are full */
+    WAITING_FOR_AH_SLOT,
+
     /** All items sold successfully */
     FINISHED,
     /** Error occurred */
